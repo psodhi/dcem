@@ -27,8 +27,15 @@ from dcem import dcem
 
 import hydra
 
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib import cm, colorbar
+from matplotlib import rc
+
 from setproctitle import setproctitle
 setproctitle('regression')
+
+plt.ion()
 
 @hydra.main(config_path="regression-conf.yaml", strict=True)
 def main(cfg):
@@ -44,6 +51,56 @@ def main(cfg):
         exp.run_ebm()
     else:
         exp.run()
+
+def to_np(tensor_arr):
+    np_arr = tensor_arr.detach().cpu().numpy()
+    return np_arr
+
+def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=True, show_cbar=False):
+    x = np.linspace(0., 2.*np.pi, num=500)
+    y = np.linspace(-7., 7., num=500)
+#     x = np.linspace(-1., 1.)
+#     y = np.linspace(-1., 1., 50)
+#     x = np.linspace(-100., 100.)
+#     y = np.linspace(-100., 100.)
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(6,4))
+    else:
+        fig = ax.get_figure()
+    
+    ax.plot(to_np(x_train), to_np(y_train), color='k')
+
+    if Enet is not None:
+        X, Y = np.meshgrid(x, y)
+        Xflat = torch.from_numpy(X.reshape(-1)).float().to(x_train.device).unsqueeze(1)
+        Yflat = torch.from_numpy(Y.reshape(-1)).float().to(x_train.device).unsqueeze(1)
+        Zflat = to_np(Enet(Xflat, Yflat))
+        Z = Zflat.reshape(X.shape)
+        
+        if norm:
+            Zmin = Z.min(axis=0)
+            Zmax = Z.max(axis=0)
+#             Zmax = np.quantile(Z, 0.75, axis=0)
+            Zrange = Zmax-Zmin
+            Z = (Z - np.expand_dims(Zmin, 0))/np.expand_dims(Zrange, 0)
+            Z[Z > 1.0] = 1.0
+            Z = np.log(Z+1e-6)
+            Z = np.clip(Z, -10., 0.)
+            CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=-10., vmax=0., extend='min', alpha=0.8)
+#             CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=0., vmax=1., extend='max', alpha=0.8)
+        else:
+            CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10)
+
+        if show_cbar:
+            fig.colorbar(CS, ax=ax)
+        
+    if pred_model is not None:
+        colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        ypreds = pred_model(x_train.unsqueeze(1)).squeeze()
+        ax.plot(to_np(x_train), to_np(ypreds), color=colors[6], linestyle='--')
+        
+    return fig, ax, Z
 
 class RegressionExp():
     def __init__(self, cfg):
@@ -61,6 +118,8 @@ class RegressionExp():
         self.Enet = EnergyNet(n_in=1, n_out=1, n_hidden=cfg.n_hidden).to(self.device)
         self.model = hydra.utils.instantiate(cfg.model, self.Enet)
         self.load_data()
+
+        self.fig, self.ax = plt.subplots(1, 1, figsize=(6,4))
 
     def dump(self, tag='latest'):
         fname = os.path.join(self.exp_dir, f'{tag}.pkl')
@@ -170,6 +229,12 @@ class RegressionExp():
                 exp_dir = os.getcwd()
                 fieldnames = ['iter', 'loss', 'lr']
                 self.dump('latest')
+
+                if step % 200 == 0:
+                    plt.cla()
+                    plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
+                    plt.show()
+                    plt.pause(1e-3)
 
 class EnergyNet(nn.Module):
     def __init__(self, n_in: int, n_out: int, n_hidden: int = 256):
