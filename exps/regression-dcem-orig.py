@@ -17,6 +17,7 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+
 import higher
 import csv
 import os
@@ -38,12 +39,10 @@ def main(cfg):
         color_scheme='Linux', call_pdb=1)
     print('Current dir: ', os.getcwd())
 
+    from regression import RegressionExp, UnrollEnergyGD, UnrollEnergyCEM
     exp = RegressionExp(cfg)
-    
-    if (cfg.model.tag == 'emcem'):
-        exp.run_ebm()
-    else:
-        exp.run()
+    exp.run()
+
 
 class RegressionExp():
     def __init__(self, cfg):
@@ -61,6 +60,7 @@ class RegressionExp():
         self.Enet = EnergyNet(n_in=1, n_out=1, n_hidden=cfg.n_hidden).to(self.device)
         self.model = hydra.utils.instantiate(cfg.model, self.Enet)
         self.load_data()
+
 
     def dump(self, tag='latest'):
         fname = os.path.join(self.exp_dir, f'{tag}.pkl')
@@ -120,56 +120,6 @@ class RegressionExp():
                 fieldnames = ['iter', 'loss', 'lr']
                 self.dump('latest')
 
-    def run_ebm(self):
-        # opt = optim.SGD(self.Enet.parameters(), lr=1e-1)
-        opt = optim.Adam(self.Enet.parameters(), lr=1e-4)
-        lr_sched = ReduceLROnPlateau(opt, 'min', patience=20, factor=0.5, verbose=True)
-
-        fieldnames = ['iter', 'loss']
-        f = open(os.path.join(self.exp_dir, 'loss.csv'), 'w')
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-
-        step = 0
-        while step < self.cfg.n_update:
-            if (step in list(range(100)) or step % 10000 == 0):
-                self.dump(f'{step:07d}')
-
-            j = npr.randint(self.cfg.n_samples)
-            for i in range(self.cfg.n_inner_update):
-                y_preds = self.model(self.x_train[j].view(1)).squeeze()
-
-                loss = self.Enet(self.x_train[j].view(-1, 1), self.y_train[j].view(-1, 1)) - self.Enet(
-                    self.x_train[j].view(-1, 1), y_preds.view(-1, 1))
-                tracking_error = F.mse_loss(input=y_preds, target=self.y_train[j])
-
-                opt.zero_grad()
-                loss.backward(retain_graph=True)
-
-                if self.cfg.clip_norm:
-                    nn.utils.clip_grad_norm_(self.Enet.parameters(), 1.0)
-                opt.step()
-                step += 1
-
-            if step % 100 == 0:
-                y_preds = self.model(self.x_train.view(-1, 1)).squeeze()
-
-                loss = self.Enet(self.x_train.view(-1, 1), self.y_train.view(-1, 1)) - self.Enet(
-                    self.x_train.view(-1, 1), y_preds.view(-1, 1))
-                loss = torch.mean(loss)
-
-                tracking_error = F.mse_loss(input=y_preds, target=self.y_train)
-
-                lr_sched.step(loss)
-                print(f'Iteration {step}: Loss {loss.item()}, Tracking Error: {tracking_error.item()}')
-                writer.writerow({
-                    'iter': step,
-                    'loss': loss.item(),
-                })
-                f.flush()
-                exp_dir = os.getcwd()
-                fieldnames = ['iter', 'loss', 'lr']
-                self.dump('latest')
 
 class EnergyNet(nn.Module):
     def __init__(self, n_in: int, n_out: int, n_hidden: int = 256):
@@ -232,7 +182,6 @@ class UnrollEnergyCEM(nn.Module):
         self.temp = temp
         self.normalize = normalize
 
-        print("Instantiated UnrollEnergyCEM class")
 
     def forward(self, x):
         b = x.ndimension() > 1
@@ -258,55 +207,6 @@ class UnrollEnergyCEM(nn.Module):
             device=x.device,
             normalize=self.temp,
         )
-
-        return yhat
-
-class EnergyModelCEM(nn.Module):
-    def __init__(self, Enet: EnergyNet, n_sample, n_elite,
-                 n_iter, init_sigma, temp, normalize):
-        super().__init__()
-        self.Enet = Enet
-        self.n_sample = n_sample
-        self.n_elite = n_elite
-        self.n_iter = n_iter
-        self.init_sigma = init_sigma
-        self.temp = temp
-        self.normalize = normalize
-
-        print("Instantiated EnergyModelCEM class")
-
-    def forward(self, x):
-        
-        # for name, param in self.Enet.named_parameters():
-        #     if param.requires_grad:
-        #         print(f"{name}: {param.data}")
-
-        b = x.ndimension() > 1
-        if not b:
-            x = x.unsqueeze(0)
-        assert x.ndimension() == 2
-        nbatch = x.size(0)
-
-        def f(y):
-            _x = x.unsqueeze(1).repeat(1, y.size(1), 1)
-            Es = self.Enet(_x.view(-1, 1), y.view(-1, 1)).view(y.size(0), y.size(1))
-            return Es
-
-        yhat = dcem(
-            f,
-            n_batch=nbatch,
-            nx=1,
-            n_sample=self.n_sample,
-            n_elite=self.n_elite,
-            n_iter=self.n_iter,
-            init_sigma=self.init_sigma,
-            temp=self.temp,
-            device=x.device,
-            normalize=self.temp,
-        )
-        
-        # yhat = torch.tensor(yhat.detach(), requires_grad=True)
-        yhat = yhat.clone().detach().requires_grad_(True)
 
         return yhat
 
