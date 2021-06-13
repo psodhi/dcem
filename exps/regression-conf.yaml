@@ -1,10 +1,10 @@
-hydra:
-  name: regression
-  run:
-    dir: ./${hydra.name}/${model.tag}.${seed}
-  sweep:
-    dir: ${hydra.name}
-    subdir: ${model.tag}.${seed}
+# hydra:
+#   name: regression
+#   run:
+#     dir: ./${hydra.name}/${model.tag}.${seed}
+#   sweep:
+#     dir: ${hydra.name}
+#     subdir: ${model.tag}.${seed}
 
 model: ${dcem}
 n_update: 100000
