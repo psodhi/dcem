@@ -113,4 +113,4 @@ def dcem(
     if lb is not None or ub is not None:
         mu = torch.clamp(mu, lb, ub)
 
-    return mu
+    return mu, sigma

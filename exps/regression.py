@@ -196,11 +196,17 @@ class RegressionExp():
 
             j = npr.randint(self.cfg.n_samples)
             for i in range(self.cfg.n_inner_update):
-                y_preds = self.model(self.x_train[j].view(1)).squeeze()
 
-                loss = self.Enet(self.x_train[j].view(-1, 1), self.y_train[j].view(-1, 1)) - self.Enet(
-                    self.x_train[j].view(-1, 1), y_preds.view(-1, 1))
-                tracking_error = F.mse_loss(input=y_preds, target=self.y_train[j])
+                y_mean, y_samples = self.model(self.x_train[j].view(1))
+                y_samples = y_samples.squeeze()
+                y_mean = y_mean.squeeze()
+
+                n_samples = y_samples.shape[0]
+                energy_samples = self.Enet((self.x_train[j].repeat(n_samples)).view(-1, 1), y_samples.view(-1, 1))
+                energy_samples = torch.mean(energy_samples)
+
+                loss = self.Enet(self.x_train[j].view(-1, 1), self.y_train[j].view(-1, 1)) - energy_samples
+                tracking_error = F.mse_loss(input=y_mean, target=self.y_train[j])
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
@@ -211,13 +217,14 @@ class RegressionExp():
                 step += 1
 
             if step % 100 == 0:
-                y_preds = self.model(self.x_train.view(-1, 1)).squeeze()
+                y_mean, _ = self.model(self.x_train.view(-1, 1))
+                y_mean = y_mean.squeeze()
 
                 loss = self.Enet(self.x_train.view(-1, 1), self.y_train.view(-1, 1)) - self.Enet(
-                    self.x_train.view(-1, 1), y_preds.view(-1, 1))
+                    self.x_train.view(-1, 1), y_mean.view(-1, 1))
                 loss = torch.mean(loss)
 
-                tracking_error = F.mse_loss(input=y_preds, target=self.y_train)
+                tracking_error = F.mse_loss(input=y_mean, target=self.y_train)
 
                 lr_sched.step(loss)
                 print(f'Iteration {step}: Loss {loss.item()}, Tracking Error: {tracking_error.item()}')
@@ -283,8 +290,6 @@ class UnrollEnergyGD(nn.Module):
             y, = inner_opt.step(E.sum(), params=[y])
 
         return y
-
-
 class UnrollEnergyCEM(nn.Module):
     def __init__(self, Enet: EnergyNet, n_sample, n_elite,
                  n_iter, init_sigma, temp, normalize):
@@ -357,7 +362,7 @@ class EnergyModelCEM(nn.Module):
             Es = self.Enet(_x.view(-1, 1), y.view(-1, 1)).view(y.size(0), y.size(1))
             return Es
 
-        yhat = dcem(
+        yhat, ysigma = dcem(
             f,
             n_batch=nbatch,
             nx=1,
@@ -370,11 +375,15 @@ class EnergyModelCEM(nn.Module):
             normalize=self.temp,
         )
         
-        # yhat = torch.tensor(yhat.detach(), requires_grad=True)
         yhat = yhat.clone().detach().requires_grad_(True)
+        ysigma = ysigma.clone().detach().requires_grad_(True)
 
-        return yhat
+        ysamples = None
+        if (yhat.shape[0] <= 1):
+            ydist = torch.distributions.multivariate_normal.MultivariateNormal(yhat, ysigma)
+            ysamples = ydist.sample((100,)) # n_samples x 1 x 1
 
+        return yhat, ysamples
 
 if __name__ == '__main__':
     import sys
