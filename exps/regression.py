@@ -36,6 +36,7 @@ from setproctitle import setproctitle
 setproctitle('regression')
 
 plt.ion()
+BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
 
 @hydra.main(config_path="regression-conf.yaml", strict=True)
 def main(cfg):
@@ -163,7 +164,6 @@ class RegressionExp():
                 if self.cfg.clip_norm:
                     nn.utils.clip_grad_norm_(self.Enet.parameters(), 1.0)
                 opt.step()
-                step += 1
 
             if step % 100 == 0:
                 y_preds = self.model(self.x_train.view(-1, 1)).squeeze()
@@ -178,6 +178,15 @@ class RegressionExp():
                 exp_dir = os.getcwd()
                 fieldnames = ['iter', 'loss', 'lr']
                 self.dump('latest')
+            
+            if step % 200 == 0:
+                plt.cla()
+                plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
+                plt.show()
+                plt.pause(1e-3)
+                plt.savefig(f"{BASE_PATH}/local/regression/plots/{self.cfg.model.tag}/{step}.png")
+
+            step += 1
 
     def run_ebm(self):
         # opt = optim.SGD(self.Enet.parameters(), lr=1e-1)
@@ -214,7 +223,6 @@ class RegressionExp():
                 if self.cfg.clip_norm:
                     nn.utils.clip_grad_norm_(self.Enet.parameters(), 1.0)
                 opt.step()
-                step += 1
 
             if step % 100 == 0:
                 y_mean, _ = self.model(self.x_train.view(-1, 1))
@@ -237,11 +245,14 @@ class RegressionExp():
                 fieldnames = ['iter', 'loss', 'lr']
                 self.dump('latest')
 
-                if step % 200 == 0:
-                    plt.cla()
-                    plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
-                    plt.show()
-                    plt.pause(1e-3)
+            if step % 200 == 0:
+                plt.cla()
+                plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
+                plt.show()
+                plt.pause(1e-3)
+                plt.savefig(f"{BASE_PATH}/local/regression/plots/{self.cfg.model.tag}/{step}.png")
+            
+            step += 1
 
 class EnergyNet(nn.Module):
     def __init__(self, n_in: int, n_out: int, n_hidden: int = 256):
