@@ -301,6 +301,7 @@ class UnrollEnergyGD(nn.Module):
             y, = inner_opt.step(E.sum(), params=[y])
 
         return y
+
 class UnrollEnergyCEM(nn.Module):
     def __init__(self, Enet: EnergyNet, n_sample, n_elite,
                  n_iter, init_sigma, temp, normalize):
@@ -356,6 +357,53 @@ class EnergyModelCEM(nn.Module):
 
         print("Instantiated EnergyModelCEM class")
 
+    def gauss_newton(self, f, y_init):
+
+        # Assuming nonlinear least squares min ||f||^2
+
+        nbatch = y_init.size(0)
+        ydim = y_init.size(1)
+
+        # Initialize outputs
+        yhat = y_init
+        ysigma = torch.zeros(nbatch, ydim, ydim, device=y_init.device, requires_grad=False)
+
+        # TODO: What convergence criteria?
+        err_tol = 1e-7
+        max_iter = 100
+
+        e_tot_prev = 1e9
+        err_diff = 1e9
+        # alpha = 1e-4
+        iter = 0
+        while (iter < max_iter and err_diff > err_tol):
+            e = f(yhat)
+            e_tot = torch.sum(torch.square(e))
+            # print(iter, torch.sum(torch.square(e)))
+
+            jacobian = torch.autograd.functional.jacobian(f, yhat)
+            # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
+            jacobian = torch.diagonal(jacobian, dim1=0, dim2=2).permute(2, 0, 1)
+            # Loop over batches?
+            for b in range(yhat.size(0)):                
+                A = jacobian[b,...]
+                AtA = torch.matmul(A.t(), A)
+                # augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
+                d = torch.matmul(A.t(), e[b,...])
+                ysigma[b,...] = torch.inverse(AtA) # Not efficient in each iter
+                dy = torch.matmul(ysigma[b,...], d)
+                # dy = torch.squeeze(dy, dim=1)
+
+                yhat[b,...] -= dy
+
+            iter += 1
+            err_diff = abs(e_tot_prev - e_tot)
+            e_tot_prev = e_tot
+
+        # print(y_init, yhat, ysigma, J, H)
+
+        return yhat, ysigma
+
     def forward(self, x):
         
         # for name, param in self.Enet.named_parameters():
@@ -373,18 +421,21 @@ class EnergyModelCEM(nn.Module):
             Es = self.Enet(_x.view(-1, 1), y.view(-1, 1)).view(y.size(0), y.size(1))
             return Es
 
-        yhat, ysigma = dcem(
-            f,
-            n_batch=nbatch,
-            nx=1,
-            n_sample=self.n_sample,
-            n_elite=self.n_elite,
-            n_iter=self.n_iter,
-            init_sigma=self.init_sigma,
-            temp=self.temp,
-            device=x.device,
-            normalize=self.temp,
-        )
+        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
+        yhat, ysigma = self.gauss_newton(f, y_init)
+
+        # yhat, ysigma = dcem(
+        #     f,
+        #     n_batch=nbatch,
+        #     nx=1,
+        #     n_sample=self.n_sample,
+        #     n_elite=self.n_elite,
+        #     n_iter=self.n_iter,
+        #     init_sigma=self.init_sigma,
+        #     temp=self.temp,
+        #     device=x.device,
+        #     normalize=self.temp,
+        # )
         
         yhat = yhat.clone().detach().requires_grad_(True)
         ysigma = ysigma.clone().detach().requires_grad_(True)
