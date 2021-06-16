@@ -76,7 +76,7 @@ def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None,
         X, Y = np.meshgrid(x, y)
         Xflat = torch.from_numpy(X.reshape(-1)).float().to(x_train.device).unsqueeze(1)
         Yflat = torch.from_numpy(Y.reshape(-1)).float().to(x_train.device).unsqueeze(1)
-        Zflat = to_np(Enet(Xflat, Yflat))
+        Zflat = to_np(torch.square(Enet(Xflat, Yflat)))
         Z = Zflat.reshape(X.shape)
         
         if norm:
@@ -190,7 +190,7 @@ class RegressionExp():
 
     def run_ebm(self):
         # opt = optim.SGD(self.Enet.parameters(), lr=1e-1)
-        opt = optim.Adam(self.Enet.parameters(), lr=1e-4)
+        opt = optim.Adam(self.Enet.parameters(), lr=1e-5)
         lr_sched = ReduceLROnPlateau(opt, 'min', patience=20, factor=0.5, verbose=True)
 
         fieldnames = ['iter', 'loss']
@@ -212,13 +212,18 @@ class RegressionExp():
 
                 n_samples = y_samples.shape[0]
                 energy_samples = self.Enet((self.x_train[j].repeat(n_samples)).view(-1, 1), y_samples.view(-1, 1))
+                energy_samples = torch.square(energy_samples)
                 energy_samples = torch.mean(energy_samples)
 
-                loss = self.Enet(self.x_train[j].view(-1, 1), self.y_train[j].view(-1, 1)) - energy_samples
-                tracking_error = F.mse_loss(input=y_mean, target=self.y_train[j])
+                gt_samples = self.Enet(self.x_train[j].view(-1, 1), self.y_train[j].view(-1, 1))
+                gt_samples = torch.square(gt_samples)
+                loss = gt_samples - energy_samples
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
+
+                # Just for reference
+                tracking_error = F.mse_loss(input=y_mean, target=self.y_train[j])
 
                 if self.cfg.clip_norm:
                     nn.utils.clip_grad_norm_(self.Enet.parameters(), 1.0)
@@ -228,8 +233,8 @@ class RegressionExp():
                 y_mean, _ = self.model(self.x_train.view(-1, 1))
                 y_mean = y_mean.squeeze()
 
-                loss = self.Enet(self.x_train.view(-1, 1), self.y_train.view(-1, 1)) - self.Enet(
-                    self.x_train.view(-1, 1), y_mean.view(-1, 1))
+                loss = torch.square(self.Enet(self.x_train.view(-1, 1), self.y_train.view(-1, 1))) - torch.square(self.Enet(
+                    self.x_train.view(-1, 1), y_mean.view(-1, 1)))
                 loss = torch.mean(loss)
 
                 tracking_error = F.mse_loss(input=y_mean, target=self.y_train)
@@ -298,6 +303,7 @@ class UnrollEnergyGD(nn.Module):
 
         for _ in range(self.n_inner_iter):
             E = self.Enet(x, y)
+            E = torch.square(E)
             y, = inner_opt.step(E.sum(), params=[y])
 
         return y
@@ -326,6 +332,7 @@ class UnrollEnergyCEM(nn.Module):
         def f(y):
             _x = x.unsqueeze(1).repeat(1, y.size(1), 1)
             Es = self.Enet(_x.view(-1, 1), y.view(-1, 1)).view(y.size(0), y.size(1))
+            Es = torch.square(Es)
             return Es
 
         yhat = dcem(
@@ -357,7 +364,7 @@ class EnergyModelCEM(nn.Module):
 
         print("Instantiated EnergyModelCEM class")
 
-    def gauss_newton(self, f, y_init):
+    def gauss_newton(self, x, y_init):
 
         # Assuming nonlinear least squares min ||f||^2
 
@@ -365,42 +372,57 @@ class EnergyModelCEM(nn.Module):
         ydim = y_init.size(1)
 
         # Initialize outputs
-        yhat = y_init
+        yhat = y_init.clone()
         ysigma = torch.zeros(nbatch, ydim, ydim, device=y_init.device, requires_grad=False)
 
         # TODO: What convergence criteria?
         err_tol = 1e-7
         max_iter = 100
 
-        e_tot_prev = 1e9
-        err_diff = 1e9
-        # alpha = 1e-4
-        iter = 0
-        while (iter < max_iter and err_diff > err_tol):
-            e = f(yhat)
-            e_tot = torch.sum(torch.square(e))
-            # print(iter, torch.sum(torch.square(e)))
 
-            jacobian = torch.autograd.functional.jacobian(f, yhat)
-            # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
-            jacobian = torch.diagonal(jacobian, dim1=0, dim2=2).permute(2, 0, 1)
-            # Loop over batches?
-            for b in range(yhat.size(0)):                
-                A = jacobian[b,...]
+        for b in range(yhat.size(0)):
+            e_tot_prev = 1e9
+            err_diff = 1e9
+            alpha = 1e-4
+            iter = 0
+
+            def f(y):
+                _x = x[b:b+1,...].unsqueeze(1).repeat(1, y.size(1), 1)
+                Es = self.Enet(_x.view(-1, 1), y.view(-1, 1)).view(y.size(0), y.size(1))
+                return Es
+
+            while (iter < max_iter and err_diff > err_tol):
+                e = f(yhat[b:b+1,...])
+                e_tot = torch.sum(torch.square(e))
+                # print(iter, e_tot)
+
+                jacobian = torch.autograd.functional.jacobian(f, yhat[b:b+1,...])
+                # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
+                jacobian = torch.diagonal(jacobian, dim1=0, dim2=2).permute(2, 0, 1)
+                # print(jacobian.shape, b)
+                # Loop over batches?
+                A = jacobian[0,...]
                 AtA = torch.matmul(A.t(), A)
-                # augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
-                d = torch.matmul(A.t(), e[b,...])
+                augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
+                d = torch.matmul(A.t(), e)
                 ysigma[b,...] = torch.inverse(AtA) # Not efficient in each iter
-                dy = torch.matmul(ysigma[b,...], d)
-                # dy = torch.squeeze(dy, dim=1)
+                dy = torch.matmul(torch.inverse(augmented_H), d)
+                potential_y = yhat[b,...] - dy
 
-                yhat[b,...] -= dy
+                eb_new = f(potential_y.unsqueeze(0))
+                eb_new_tot = torch.sum(torch.square(eb_new))
+                # print(eb_new_tot, e_tot)
+                if eb_new < e:
+                    yhat[b,...] = potential_y
+                    alpha /= 10
 
-            iter += 1
-            err_diff = abs(e_tot_prev - e_tot)
-            e_tot_prev = e_tot
+                    err_diff = abs(eb_new_tot - e_tot)
+                else:
+                    alpha *= 10
 
-        # print(y_init, yhat, ysigma, J, H)
+                iter += 1
+
+            print(y_init[b,...], yhat[b,...], ysigma[b,...], A)
 
         return yhat, ysigma
 
@@ -416,26 +438,28 @@ class EnergyModelCEM(nn.Module):
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
+        # y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
+        # yhat, ysigma = self.gauss_newton(x, y_init)
+
         def f(y):
             _x = x.unsqueeze(1).repeat(1, y.size(1), 1)
             Es = self.Enet(_x.view(-1, 1), y.view(-1, 1)).view(y.size(0), y.size(1))
+            Es = torch.square(Es)
             return Es
 
-        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
-        yhat, ysigma = self.gauss_newton(f, y_init)
 
-        # yhat, ysigma = dcem(
-        #     f,
-        #     n_batch=nbatch,
-        #     nx=1,
-        #     n_sample=self.n_sample,
-        #     n_elite=self.n_elite,
-        #     n_iter=self.n_iter,
-        #     init_sigma=self.init_sigma,
-        #     temp=self.temp,
-        #     device=x.device,
-        #     normalize=self.temp,
-        # )
+        yhat, ysigma = dcem(
+            f,
+            n_batch=nbatch,
+            nx=1,
+            n_sample=self.n_sample,
+            n_elite=self.n_elite,
+            n_iter=self.n_iter,
+            init_sigma=self.init_sigma,
+            temp=self.temp,
+            device=x.device,
+            normalize=self.temp,
+        )
         
         yhat = yhat.clone().detach().requires_grad_(True)
         ysigma = ysigma.clone().detach().requires_grad_(True)
