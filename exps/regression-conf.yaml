@@ -6,20 +6,30 @@
 #     dir: ${hydra.name}
 #     subdir: ${model.tag}.${seed}
 
-model: ${emcem}
+model: ${emgn}
+enet: ${enet_basic}
+n_disp_step: 200 # 200
+show_plot: True # True
 n_update: 100000
 n_inner_update: 1
 seed: 0
 n_hidden: 128
 n_samples: 100
 clip_norm: True
+lr: 1e-4
+
+enet_basic:
+  class: regression.EnergyNetBasic
+  tag: enet_basic
+  params:
+    n_hidden: 128
 
 gd:
   class: regression.UnrollEnergyGD
   tag: gd
   params:
     n_inner_iter: 10
-    inner_lr: 1e-1
+    inner_lr: 1e-3
 
 dcem:
   class: regression.UnrollEnergyCEM
@@ -28,7 +38,7 @@ dcem:
     n_sample: 100
     n_elite: 10
     n_iter: 10
-    init_sigma: 7.
+    init_sigma: 1.
     temp: 1.
     normalize: True
 
@@ -37,8 +47,21 @@ emcem:
   tag: emcem
   params:
     n_sample: 100
-    n_elite: 10
-    n_iter: 10
-    init_sigma: 7.
     temp: 1.
-    normalize: True
+    min_cov: 1e-3
+    max_cov: 10.0
+    cem_n_sample: 100
+    cem_n_elite: 10
+    cem_n_iter: 10
+    cem_init_sigma: 7.
+    cem_temp: 1.
+    cem_normalize: True
+
+emgn:
+  class: regression.EnergyModelGN
+  tag: emgn
+  params:
+    n_sample: 100
+    temp: 1e9
+    min_cov: 1e-3
+    max_cov: 10.0

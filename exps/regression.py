@@ -20,6 +20,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import higher
 import csv
 import os
+import datetime
 
 import pickle as pkl
 
@@ -48,7 +49,7 @@ def main(cfg):
 
     exp = RegressionExp(cfg)
     
-    if (cfg.model.tag == 'emcem'):
+    if (cfg.model.tag == 'emcem' or cfg.model.tag == 'emgn'):
         exp.run_ebm()
     else:
         exp.run()
@@ -57,13 +58,9 @@ def to_np(tensor_arr):
     np_arr = tensor_arr.detach().cpu().numpy()
     return np_arr
 
-def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=True, show_cbar=False):
+def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=True, show_cbar=False, y_samples=None):
     x = np.linspace(0., 2.*np.pi, num=500)
     y = np.linspace(-7., 7., num=500)
-#     x = np.linspace(-1., 1.)
-#     y = np.linspace(-1., 1., 50)
-#     x = np.linspace(-100., 100.)
-#     y = np.linspace(-100., 100.)
 
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(6,4))
@@ -100,6 +97,13 @@ def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None,
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
         ypreds = pred_model(x_train.unsqueeze(1)).squeeze()
         ax.plot(to_np(x_train), to_np(ypreds), color=colors[6], linestyle='--')
+
+    if y_samples is not None:
+        x_samples = x_train.repeat((y_samples.shape[0],1))
+        ax.scatter(to_np(x_samples.flatten()), to_np(y_samples.flatten()), color='#e6ab02',s=2,alpha=0.25)
+
+    ax.set_xlim(0, 2.*np.pi)
+    ax.set_ylim(-7, 7)
         
     return fig, ax, Z
 
@@ -116,7 +120,8 @@ class RegressionExp():
 
         self.device = torch.device("cuda") \
             if torch.cuda.is_available() else torch.device("cpu")
-        self.Enet = EnergyNet(n_in=1, n_out=1, n_hidden=cfg.n_hidden).to(self.device)
+        #self.Enet = EnergyNet(n_in=1, n_out=1, n_hidden=cfg.n_hidden).to(self.device)
+        self.Enet = hydra.utils.instantiate(cfg.enet, n_in=1, n_out=1).to(self.device)
         self.model = hydra.utils.instantiate(cfg.model, self.Enet)
         self.load_data()
 
@@ -150,6 +155,14 @@ class RegressionExp():
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
+        dt = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        directory = f"{BASE_PATH}/local/regression/plots/{self.cfg.model.tag}/{dt}/"
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        with open(os.path.join(directory, "config.txt"), "w") as config_file:
+            print(self.cfg.pretty(), file=config_file)
+            config_file.close()
+
         step = 0
         while step < self.cfg.n_update:
             if (step in list(range(100)) or step % 10000 == 0):
@@ -165,7 +178,7 @@ class RegressionExp():
                     nn.utils.clip_grad_norm_(self.Enet.parameters(), 1.0)
                 opt.step()
 
-            if step % 100 == 0:
+            if step % self.cfg.n_disp_step == 0:
                 y_preds = self.model(self.x_train.view(-1, 1)).squeeze()
                 loss = F.mse_loss(input=y_preds, target=self.y_train)
                 lr_sched.step(loss)
@@ -179,24 +192,33 @@ class RegressionExp():
                 fieldnames = ['iter', 'loss', 'lr']
                 self.dump('latest')
             
-            if step % 200 == 0:
                 plt.cla()
                 plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
-                plt.show()
-                plt.pause(1e-3)
-                plt.savefig(f"{BASE_PATH}/local/regression/plots/{self.cfg.model.tag}/{step}.png")
+                if self.cfg.show_plot:
+                    plt.show()
+                    plt.pause(1e-3)
+                savepath = os.path.join(directory, f"{step}.png")
+                plt.savefig(savepath)
 
             step += 1
 
     def run_ebm(self):
         # opt = optim.SGD(self.Enet.parameters(), lr=1e-1)
-        opt = optim.Adam(self.Enet.parameters(), lr=1e-5)
+        opt = optim.Adam(self.Enet.parameters(), lr=self.cfg.lr)
         lr_sched = ReduceLROnPlateau(opt, 'min', patience=20, factor=0.5, verbose=True)
 
         fieldnames = ['iter', 'loss']
         f = open(os.path.join(self.exp_dir, 'loss.csv'), 'w')
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
+
+        dt = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        directory = f"{BASE_PATH}/local/regression/plots/{self.cfg.model.tag}/{dt}/"
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        with open(os.path.join(directory, "config.txt"), "w") as config_file:
+            print(self.cfg.pretty(), file=config_file)
+            config_file.close()
 
         step = 0
         while step < self.cfg.n_update:
@@ -207,10 +229,11 @@ class RegressionExp():
             for i in range(self.cfg.n_inner_update):
 
                 y_mean, y_samples = self.model(self.x_train[j].view(1))
+                n_samples = y_samples.shape[0]
+
                 y_samples = y_samples.squeeze()
                 y_mean = y_mean.squeeze()
 
-                n_samples = y_samples.shape[0]
                 energy_samples = self.Enet((self.x_train[j].repeat(n_samples)).view(-1, 1), y_samples.view(-1, 1))
                 energy_samples = torch.square(energy_samples)
                 energy_samples = torch.mean(energy_samples)
@@ -229,8 +252,8 @@ class RegressionExp():
                     nn.utils.clip_grad_norm_(self.Enet.parameters(), 1.0)
                 opt.step()
 
-            if step % 100 == 0:
-                y_mean, _ = self.model(self.x_train.view(-1, 1))
+            if step % self.cfg.n_disp_step == 0:
+                y_mean, y_samples = self.model(self.x_train.view(-1, 1))
                 y_mean = y_mean.squeeze()
 
                 loss = torch.square(self.Enet(self.x_train.view(-1, 1), self.y_train.view(-1, 1))) - torch.square(self.Enet(
@@ -250,17 +273,18 @@ class RegressionExp():
                 fieldnames = ['iter', 'loss', 'lr']
                 self.dump('latest')
 
-            if step % 200 == 0:
                 plt.cla()
-                plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
-                plt.show()
-                plt.pause(1e-3)
-                plt.savefig(f"{BASE_PATH}/local/regression/plots/{self.cfg.model.tag}/{step}.png")
+                plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax, y_samples=y_samples)
+                if self.cfg.show_plot:
+                    plt.show()
+                    plt.pause(1e-3)
+                savepath = os.path.join(directory, "{:06d}.png".format(step))
+                plt.savefig(savepath)
             
             step += 1
 
-class EnergyNet(nn.Module):
-    def __init__(self, n_in: int, n_out: int, n_hidden: int = 256):
+class EnergyNetBasic(nn.Module):
+    def __init__(self, n_in: int, n_out: int, n_hidden):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -275,13 +299,14 @@ class EnergyNet(nn.Module):
         )
 
     def forward(self, x, y):
+        x = x / (2.0*np.pi) # normalize
+        y = (y + 7.0)/14.0
         z = torch.cat((x, y), dim=-1)
         E = self.E_net(z)
         return E
 
-
 class UnrollEnergyGD(nn.Module):
-    def __init__(self, Enet: EnergyNet, n_inner_iter, inner_lr):
+    def __init__(self, Enet, n_inner_iter, inner_lr):
         super().__init__()
         self.Enet = Enet
         self.n_inner_iter = n_inner_iter
@@ -309,7 +334,7 @@ class UnrollEnergyGD(nn.Module):
         return y
 
 class UnrollEnergyCEM(nn.Module):
-    def __init__(self, Enet: EnergyNet, n_sample, n_elite,
+    def __init__(self, Enet, n_sample, n_elite,
                  n_iter, init_sigma, temp, normalize):
         super().__init__()
         self.Enet = Enet
@@ -335,7 +360,7 @@ class UnrollEnergyCEM(nn.Module):
             Es = torch.square(Es)
             return Es
 
-        yhat = dcem(
+        yhat, ycov = dcem(
             f,
             n_batch=nbatch,
             nx=1,
@@ -350,40 +375,33 @@ class UnrollEnergyCEM(nn.Module):
 
         return yhat
 
-class EnergyModelCEM(nn.Module):
-    def __init__(self, Enet: EnergyNet, n_sample, n_elite,
-                 n_iter, init_sigma, temp, normalize):
+class EnergyModelGN(nn.Module):
+    def __init__(self, Enet, n_sample, temp, min_cov, max_cov):
         super().__init__()
         self.Enet = Enet
         self.n_sample = n_sample
-        self.n_elite = n_elite
-        self.n_iter = n_iter
-        self.init_sigma = init_sigma
         self.temp = temp
-        self.normalize = normalize
+        self.min_cov = min_cov
+        self.max_cov = max_cov
 
-        print("Instantiated EnergyModelCEM class")
+        print("Instantiated EnergyModelGN class")
 
     def gauss_newton(self, x, y_init):
-
         # Assuming nonlinear least squares min ||f||^2
-
         nbatch = y_init.size(0)
         ydim = y_init.size(1)
 
         # Initialize outputs
         yhat = y_init.clone()
-        ysigma = torch.zeros(nbatch, ydim, ydim, device=y_init.device, requires_grad=False)
+        ycov = torch.zeros(nbatch, ydim, ydim, device=y_init.device, requires_grad=False)
 
         # TODO: What convergence criteria?
         err_tol = 1e-7
-        max_iter = 100
-
+        max_iter = 20
 
         for b in range(yhat.size(0)):
-            e_tot_prev = 1e9
             err_diff = 1e9
-            alpha = 1e-4
+            alpha = 1.0
             iter = 0
 
             def f(y):
@@ -394,7 +412,6 @@ class EnergyModelCEM(nn.Module):
             while (iter < max_iter and err_diff > err_tol):
                 e = f(yhat[b:b+1,...])
                 e_tot = torch.sum(torch.square(e))
-                # print(iter, e_tot)
 
                 jacobian = torch.autograd.functional.jacobian(f, yhat[b:b+1,...])
                 # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
@@ -405,14 +422,14 @@ class EnergyModelCEM(nn.Module):
                 AtA = torch.matmul(A.t(), A)
                 augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
                 d = torch.matmul(A.t(), e)
-                ysigma[b,...] = torch.inverse(AtA) # Not efficient in each iter
+                ycov[b,...] = torch.inverse(AtA) # Not efficient in each iter
                 dy = torch.matmul(torch.inverse(augmented_H), d)
                 potential_y = yhat[b,...] - dy
 
                 eb_new = f(potential_y.unsqueeze(0))
                 eb_new_tot = torch.sum(torch.square(eb_new))
-                # print(eb_new_tot, e_tot)
-                if eb_new < e:
+                #print(eb_new_tot, e_tot)
+                if eb_new_tot < e_tot:
                     yhat[b,...] = potential_y
                     alpha /= 10
 
@@ -422,24 +439,60 @@ class EnergyModelCEM(nn.Module):
 
                 iter += 1
 
-            print(y_init[b,...], yhat[b,...], ysigma[b,...], A)
-
-        return yhat, ysigma
+        return yhat, ycov
 
     def forward(self, x):
-        
-        # for name, param in self.Enet.named_parameters():
-        #     if param.requires_grad:
-        #         print(f"{name}: {param.data}")
-
         b = x.ndimension() > 1
         if not b:
             x = x.unsqueeze(0)
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        # y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
-        # yhat, ysigma = self.gauss_newton(x, y_init)
+        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
+        yhat, ycov = self.gauss_newton(x, y_init)
+        
+        yhat = yhat.clone().detach().requires_grad_(True).flatten()
+        ycov = ycov.clone().detach().requires_grad_(True).flatten()
+
+        if self.temp > 0:
+            ycov_clamped = torch.clamp(ycov/self.temp, self.min_cov, self.max_cov)
+            ydist = torch.distributions.multivariate_normal.MultivariateNormal(yhat, torch.diag(ycov_clamped))
+            ysamples = ydist.sample((self.n_sample,)) 
+        else:
+            ysamples = 20 * torch.rand(self.n_sample, nbatch) - 10 
+
+        return yhat, ysamples
+
+class EnergyModelCEM(nn.Module):
+    def __init__(self, Enet, n_sample, temp, min_cov, max_cov, cem_n_sample, cem_n_elite,
+                 cem_n_iter, cem_init_sigma, cem_temp, cem_normalize):
+        super().__init__()
+        self.Enet = Enet
+        self.n_sample = n_sample
+        self.temp = temp
+        self.min_cov = min_cov
+        self.max_cov = max_cov
+        self.cem_n_sample = cem_n_sample
+        self.cem_n_elite = cem_n_elite
+        self.cem_n_iter = cem_n_iter
+        self.cem_init_sigma = cem_init_sigma
+        self.cem_temp = cem_temp
+        self.cem_normalize = cem_normalize
+
+        print("Instantiated EnergyModelCEM class")
+
+    def forward(self, x):
+        b = x.ndimension() > 1
+        if not b:
+            x = x.unsqueeze(0)
+        assert x.ndimension() == 2
+        nbatch = x.size(0)
+
+        if self.temp <= 0:
+            ysamples = 20 * torch.rand(self.n_sample, nbatch) - 10 
+            yhat = torch.rand(1, nbatch)
+            return yhat, ysamples
+
 
         def f(y):
             _x = x.unsqueeze(1).repeat(1, y.size(1), 1)
@@ -448,28 +501,28 @@ class EnergyModelCEM(nn.Module):
             return Es
 
 
-        yhat, ysigma = dcem(
+        yhat, ycov = dcem(
             f,
             n_batch=nbatch,
             nx=1,
-            n_sample=self.n_sample,
-            n_elite=self.n_elite,
-            n_iter=self.n_iter,
-            init_sigma=self.init_sigma,
-            temp=self.temp,
+            n_sample=self.cem_n_sample,
+            n_elite=self.cem_n_elite,
+            n_iter=self.cem_n_iter,
+            init_sigma=self.cem_init_sigma,
+            temp=self.cem_temp,
             device=x.device,
-            normalize=self.temp,
+            normalize=self.cem_normalize,
         )
         
-        yhat = yhat.clone().detach().requires_grad_(True)
-        ysigma = ysigma.clone().detach().requires_grad_(True)
+        yhat = yhat.clone().detach().requires_grad_(True).flatten()
+        ycov = ycov.clone().detach().requires_grad_(True).flatten()
 
-        ysamples = None
-        if (yhat.shape[0] <= 1):
-            ydist = torch.distributions.multivariate_normal.MultivariateNormal(yhat, ysigma)
-            ysamples = ydist.sample((100,)) # n_samples x 1 x 1
+        ycov_clamped = torch.clamp(ycov/self.temp, self.min_cov, self.max_cov)
+        ydist = torch.distributions.multivariate_normal.MultivariateNormal(yhat, torch.diag(ycov_clamped))
+        ysamples = ydist.sample((self.n_sample,)) 
 
         return yhat, ysamples
+
 
 if __name__ == '__main__':
     import sys
