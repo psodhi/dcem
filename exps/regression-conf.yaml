@@ -7,7 +7,7 @@
 #     subdir: ${model.tag}.${seed}
 
 model: ${emgn}
-enet: ${enet_basic}
+enet: ${enet_rff}
 n_disp_step: 200 # 200
 show_plot: True # True
 n_update: 100000
@@ -23,6 +23,14 @@ enet_basic:
   tag: enet_basic
   params:
     n_hidden: 128
+
+enet_rff:
+  class: regression.EnergyNetRFF
+  tag: enet_rff
+  params:
+    n_hidden: 128
+    sigma: 1.
+    encoded_size: 128
 
 gd:
   class: regression.UnrollEnergyGD

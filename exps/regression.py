@@ -23,6 +23,7 @@ import os
 import datetime
 
 import pickle as pkl
+import rff
 
 from dcem import dcem
 
@@ -303,6 +304,31 @@ class EnergyNetBasic(nn.Module):
         y = (y + 7.0)/14.0
         z = torch.cat((x, y), dim=-1)
         E = self.E_net(z)
+        return E
+
+class EnergyNetRFF(nn.Module):
+    def __init__(self, n_in: int, n_out: int, n_hidden, sigma, encoded_size):
+        super().__init__()
+        self.n_in = n_in
+        self.n_out = n_out
+
+        self.encoding = rff.layers.GaussianEncoding(sigma=sigma, input_size=n_in+n_out, encoded_size=encoded_size)
+        encoding_out = encoded_size * (n_in+n_out)
+
+        self.E_net = nn.Sequential(
+            nn.Linear(encoding_out, n_hidden),
+            nn.Softplus(),
+            nn.Linear(n_hidden, n_hidden),
+            nn.Softplus(),
+            nn.Linear(n_hidden, 1),
+        )
+
+    def forward(self, x, y):
+        x = x / (2.0*np.pi)
+        y = (y + 7.0)/14.0
+        z = torch.cat((x, y), dim=-1)
+        encoded = self.encoding(z)
+        E = self.E_net(encoded)
         return E
 
 class UnrollEnergyGD(nn.Module):
