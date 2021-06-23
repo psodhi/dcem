@@ -6,7 +6,7 @@
 #     dir: ${hydra.name}
 #     subdir: ${model.tag}.${seed}
 
-model: ${emgn}
+model: ${gn}
 enet: ${enet_rff}
 n_disp_step: 200 # 200
 show_plot: True # True
@@ -38,6 +38,13 @@ gd:
   params:
     n_inner_iter: 10
     inner_lr: 1e-3
+
+gn:
+  class: regression.UnrollEnergyGN
+  tag: gn
+  params:
+    n_inner_iter: 10
+    inner_lr: 1 # Standard GN is 1.0
 
 dcem:
   class: regression.UnrollEnergyCEM

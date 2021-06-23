@@ -356,8 +356,81 @@ class UnrollEnergyGD(nn.Module):
             E = self.Enet(x, y)
             E = torch.square(E)
             y, = inner_opt.step(E.sum(), params=[y])
-
+        
         return y
+
+class UnrollEnergyGN(nn.Module):
+    def __init__(self, Enet, n_inner_iter, inner_lr):
+        super().__init__()
+        self.Enet = Enet
+        self.n_inner_iter = n_inner_iter
+        self.inner_lr = inner_lr
+
+    def forward(self, x):
+        b = x.ndimension() > 1
+        if not b:
+            x = x.unsqueeze(0)
+        assert x.ndimension() == 2
+        nbatch = x.size(0)
+
+        y = [torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
+        y[-1].retain_grad()
+
+        for _ in range(self.n_inner_iter):
+
+            E = self.Enet(x, y[-1])
+            y_tmp = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+            y_new = y_tmp.clone()
+            for b in range(E.shape[0]):
+                # E = self.Enet(x[b,...], y[-1][b,...])
+                E[b].backward(retain_graph=True, create_graph=False)
+                # print(y[-1].grad[b])
+                J_inv = 1.0/(y[-1].grad[b])
+                step = J_inv*E[b]
+                y_new[b] = y[-1][b] - self.inner_lr * step
+            y.append(y_new)
+            y[-1].retain_grad()
+
+            # gradients = torch.eye(E.shape[1])
+            # gradients = gradients.repeat(E.shape[0], 1)
+            # print(E.shape, gradients.shape)
+            # # print(gradients)
+            # J_inv = torch.zeros_like(y[-1])
+            # for b in range(E.shape[0]):
+            #     gradients = torch.zeros_like(y[-1])
+            #     gradients[b,:] = 1
+            #     E.backward(gradients, retain_graph=True, create_graph=False)
+            #     y[-1].grad[b] = 
+            #     J_inv[b,:] = y[-1].grad
+
+            # J_inv = torch.squeeze(torch.inverse(torch.unsqueeze(y[-1].grad, 2)), 2)
+            # step = J_inv*E
+            # # # TODO: Is this negative?
+            # y_new = y[-1] - self.inner_lr * step
+            # y_new.retain_grad()
+            # y.append(y_new)
+
+            # Es, dE_dy = self.get_batch_jacobian(x, y[-1])
+            # noutputs = 1
+
+            # x = x.unsqueeze(1) # b, 1 ,in_dim
+            # x = x.repeat(1, noutputs, 1) # b, out_dim, in_dim
+
+            # y = y.unsqueeze(1) # b, 1 ,in_dim
+            # n = y.size()[0]
+            # y = y.repeat(1, noutputs, 1) # b, out_dim, in_dim
+            # y.requires_grad_(True)
+            # E = self.Enet(x, y)
+            # input_val = torch.eye(noutputs).reshape(1,noutputs, noutputs).repeat(n, 1, 1)
+            # E.backward(input_val)
+            # J_inv = torch.inverse(dE_dy)
+            # step = J_inv*Es
+            # y_new = y[-1] - self.inner_lr * step
+            # y_new.retain_grad()
+            # y.append(y_new)
+
+
+        return y[-1]
 
 class UnrollEnergyCEM(nn.Module):
     def __init__(self, Enet, n_sample, n_elite,
