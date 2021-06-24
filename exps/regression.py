@@ -373,21 +373,42 @@ class UnrollEnergyGN(nn.Module):
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
+        # y = [-7+14*torch.rand(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
         y = [torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
         y[-1].retain_grad()
 
-        for _ in range(self.n_inner_iter):
-
-            E = self.Enet(x, y[-1])
+        for iter in range(self.n_inner_iter):
+            # print("Iter: ", iter)
+            # E = self.Enet(x, y[-1])
             y_tmp = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
             y_new = y_tmp.clone()
-            for b in range(E.shape[0]):
+            for b in range(x.shape[0]):
                 # E = self.Enet(x[b,...], y[-1][b,...])
-                E[b].backward(retain_graph=True, create_graph=False)
-                # print(y[-1].grad[b])
-                J_inv = 1.0/(y[-1].grad[b])
-                step = J_inv*E[b]
-                y_new[b] = y[-1][b] - self.inner_lr * step
+                # if iter == 0:
+                    # E[b].backward(retain_graph=True, create_graph=True)
+                # else:
+                    # E[b].backward(retain_graph=True, create_graph=False)
+                # E[b].backward(retain_graph=True, create_graph=False)
+                yb = y[-1][b]
+                E = self.Enet(x[b], yb)
+                # H = torch.autograd.grad(grad_yb, yb, retain_graph=True, create_graph=False)
+                # grad_gn = torch.autograd.grad(E[b], y[-1], retain_graph=True, create_graph=True)
+                # print(y[-1].grad)
+
+                # Gauss-Newton
+                grad_yb = torch.autograd.grad(E, yb, retain_graph=True, create_graph=True)
+                J_inv = 1.0/(grad_yb[0][0])
+                step = J_inv*E
+                y_new[b] = yb - self.inner_lr * step
+
+                # Newton's Method
+                # grad_yb = torch.autograd.grad(torch.square(E), yb, retain_graph=True, create_graph=True)
+                # print(H)
+                # print(grad_yb)
+                # step = (1.0/H[0][0]) * grad_yb[0][0]
+                # print(step, gn_step)
+                # y_new[b] = yb - self.inner_lr * step
+
             y.append(y_new)
             y[-1].retain_grad()
 
