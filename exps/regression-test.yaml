@@ -1,2 +1,3 @@
-model_path: "/Users/dexheimere/Files/research/code/dcem/local/regression/models/gn/train9/model.pt"
-n_samples: 100
+# model_path: "/Users/dexheimere/Files/research/code/dcem/local/regression/models/gn/train7/model.pt"
+model_path: "/Users/dexheimere/Files/research/code/dcem/local/regression/models/emgn/20210625-155803/model.pt"
+n_samples: 25

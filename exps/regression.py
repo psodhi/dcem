@@ -231,6 +231,10 @@ class RegressionExp():
             print(self.cfg.pretty(), file=config_file)
             config_file.close()
 
+        model_directory = f"{BASE_PATH}/local/regression/models/{self.cfg.model.tag}/{dt}/"
+        if not os.path.exists(model_directory):
+            os.makedirs(model_directory)
+
         step = 0
         while step < self.cfg.n_update:
             if (step in list(range(100)) or step % 10000 == 0):
