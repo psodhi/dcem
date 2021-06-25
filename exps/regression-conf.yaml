@@ -37,7 +37,7 @@ gd:
   tag: gd
   params:
     n_inner_iter: 10
-    inner_lr: 1e-3
+    inner_lr: 1e-2
 
 gn:
   class: regression.UnrollEnergyGN

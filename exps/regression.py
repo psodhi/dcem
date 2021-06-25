@@ -16,6 +16,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.autograd import Variable
 
 import higher
 import csv
@@ -181,6 +182,8 @@ class RegressionExp():
 
             if step % self.cfg.n_disp_step == 0:
                 y_preds = self.model(self.x_train.view(-1, 1)).squeeze()
+                # print(y_preds)
+                # print(self.y_train)
                 loss = F.mse_loss(input=y_preds, target=self.y_train)
                 lr_sched.step(loss)
                 print(f'Iteration {step}: Loss {loss:.2f}')
@@ -345,7 +348,9 @@ class UnrollEnergyGD(nn.Module):
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        y = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+        # y = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+        y_init = (x*torch.sin(x)).clone()
+        y = Variable(y_init.data, requires_grad=True)
 
         inner_opt = higher.get_diff_optim(
             torch.optim.SGD([y], lr=self.inner_lr),
@@ -373,8 +378,10 @@ class UnrollEnergyGN(nn.Module):
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
+        y_init = (x*torch.sin(x)).clone()
+        y = [Variable(y_init.data, requires_grad=True)]
         # y = [-7+14*torch.rand(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
-        y = [torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
+        # y = [torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
         y[-1].retain_grad()
 
         for iter in range(self.n_inner_iter):
