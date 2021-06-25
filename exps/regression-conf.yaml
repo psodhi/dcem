@@ -10,7 +10,7 @@ model: ${gn}
 enet: ${enet_rff}
 n_disp_step: 200 # 200
 show_plot: True # True
-n_update: 100000
+n_update: 10000
 n_inner_update: 1
 seed: 0
 n_hidden: 128
@@ -43,7 +43,7 @@ gn:
   class: regression.UnrollEnergyGN
   tag: gn
   params:
-    n_inner_iter: 10
+    n_inner_iter: 7
     inner_lr: 1 # Standard GN is 1.0
 
 dcem:

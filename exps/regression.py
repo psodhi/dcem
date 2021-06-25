@@ -165,6 +165,10 @@ class RegressionExp():
             print(self.cfg.pretty(), file=config_file)
             config_file.close()
 
+        model_directory = f"{BASE_PATH}/local/regression/models/{self.cfg.model.tag}/{dt}/"
+        if not os.path.exists(model_directory):
+            os.makedirs(model_directory)
+
         step = 0
         while step < self.cfg.n_update:
             if (step in list(range(100)) or step % 10000 == 0):
@@ -203,6 +207,9 @@ class RegressionExp():
                     plt.pause(1e-3)
                 savepath = os.path.join(directory, f"{step}.png")
                 plt.savefig(savepath)
+
+                modelpath = os.path.join(model_directory, "model.pt")
+                torch.save(self.Enet.state_dict(), modelpath)
 
             step += 1
 
@@ -284,6 +291,9 @@ class RegressionExp():
                     plt.pause(1e-3)
                 savepath = os.path.join(directory, "{:06d}.png".format(step))
                 plt.savefig(savepath)
+
+                modelpath = os.path.join(model_directory, "model.pt")
+                torch.save(self.Enet.state_dict(), modelpath)
             
             step += 1
 
@@ -371,14 +381,17 @@ class UnrollEnergyGN(nn.Module):
         self.n_inner_iter = n_inner_iter
         self.inner_lr = inner_lr
 
-    def forward(self, x):
+    def forward(self, x, y0=None):
         b = x.ndimension() > 1
         if not b:
             x = x.unsqueeze(0)
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        y_init = (x*torch.sin(x)).clone()
+        if y0 is None:
+            y_init = (x*torch.sin(x)).clone()
+        else:
+            y_init = y0.clone()
         y = [Variable(y_init.data, requires_grad=True)]
         # y = [-7+14*torch.rand(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
         # y = [torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
