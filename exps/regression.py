@@ -60,12 +60,14 @@ def to_np(tensor_arr):
     np_arr = tensor_arr.detach().cpu().numpy()
     return np_arr
 
-def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=True, show_cbar=False, y_samples=None):
+def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=False, show_cbar=False, y_samples=None):
     x = np.linspace(0., 2.*np.pi, num=500)
     y = np.linspace(-7., 7., num=500)
 
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(6,4))
+        # fig, ax = plt.subplots(1, 1, figsize=(6,4))
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
     else:
         fig = ax.get_figure()
     
@@ -87,10 +89,12 @@ def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None,
             Z[Z > 1.0] = 1.0
             Z = np.log(Z+1e-6)
             Z = np.clip(Z, -10., 0.)
-            CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=-10., vmax=0., extend='min', alpha=0.8)
-#             CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=0., vmax=1., extend='max', alpha=0.8)
+            # CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=-10., vmax=0., extend='min', alpha=0.8)
+            # CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=0., vmax=1., extend='max', alpha=0.8)
+            CS = ax.plot_surface(X, Y, Z, cmap=cm.Blues, vmin=-10., vmax=0.)
         else:
-            CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10)
+            # CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10)
+            CS = ax.plot_surface(X, Y, Z, cmap=cm.Blues)
 
         if show_cbar:
             fig.colorbar(CS, ax=ax)
@@ -127,7 +131,10 @@ class RegressionExp():
         self.model = hydra.utils.instantiate(cfg.model, self.Enet)
         self.load_data()
 
-        self.fig, self.ax = plt.subplots(1, 1, figsize=(6,4))
+        # self.fig, self.ax = plt.subplots(1, 1, figsize=(6,4))
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.ax.view_init(elev=30., azim=0)
 
     def dump(self, tag='latest'):
         fname = os.path.join(self.exp_dir, f'{tag}.pkl')
@@ -276,6 +283,7 @@ class RegressionExp():
                 loss = torch.mean(loss)
 
                 tracking_error = F.mse_loss(input=y_mean, target=self.y_train)
+                # print(y_mean, self.y_train)
 
                 lr_sched.step(loss)
                 print(f'Iteration {step}: Loss {loss.item()}, Tracking Error: {tracking_error.item()}')
@@ -355,16 +363,22 @@ class UnrollEnergyGD(nn.Module):
         self.n_inner_iter = n_inner_iter
         self.inner_lr = inner_lr
 
-    def forward(self, x):
+    def forward(self, x, y0=None):
         b = x.ndimension() > 1
         if not b:
             x = x.unsqueeze(0)
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        # y = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
-        y_init = (x*torch.sin(x)).clone()
+        if y0 is None:
+            y_init = (x*torch.sin(x)).clone()
+        else:
+            y_init = y0.clone()
         y = Variable(y_init.data, requires_grad=True)
+
+        # y = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+        # y_init = (x*torch.sin(x)).clone()
+        # y = Variable(y_init.data, requires_grad=True)
 
         inner_opt = higher.get_diff_optim(
             torch.optim.SGD([y], lr=self.inner_lr),
@@ -541,11 +555,11 @@ class EnergyModelGN(nn.Module):
 
         # TODO: What convergence criteria?
         err_tol = 1e-7
-        max_iter = 20
+        max_iter = 100
 
         for b in range(yhat.size(0)):
             err_diff = 1e9
-            alpha = 1.0
+            alpha = 1e9
             iter = 0
 
             def f(y):
@@ -566,8 +580,9 @@ class EnergyModelGN(nn.Module):
                 AtA = torch.matmul(A.t(), A)
                 augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
                 d = torch.matmul(A.t(), e)
-                ycov[b,...] = torch.inverse(AtA) # Not efficient in each iter
-                dy = torch.matmul(torch.inverse(augmented_H), d)
+                H_inv = torch.inverse(augmented_H)
+                # ycov[b,...] = torch.inverse(augmented_H) # Not efficient in each iter
+                dy = torch.matmul(H_inv, d)
                 potential_y = yhat[b,...] - dy
 
                 eb_new = f(potential_y.unsqueeze(0))
@@ -575,6 +590,7 @@ class EnergyModelGN(nn.Module):
                 #print(eb_new_tot, e_tot)
                 if eb_new_tot < e_tot:
                     yhat[b,...] = potential_y
+                    ycov[b,...] = torch.inverse(AtA)
                     alpha /= 10
 
                     err_diff = abs(eb_new_tot - e_tot)
@@ -583,17 +599,46 @@ class EnergyModelGN(nn.Module):
 
                 iter += 1
 
+            # while (iter < max_iter and err_diff > err_tol):
+            #     e = f(yhat[b:b+1,...])
+            #     e_tot = torch.sum(torch.square(e))
+
+            #     jacobian = torch.autograd.functional.jacobian(f, yhat[b:b+1,...])
+            #     # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
+            #     jacobian = torch.diagonal(jacobian, dim1=0, dim2=2).permute(2, 0, 1)
+            #     # print(jacobian.shape, b)
+            #     # Loop over batches?
+            #     A = jacobian[0,...]
+            #     AtA = torch.matmul(A.t(), A)
+            #     d = torch.matmul(A.t(), e)
+            #     ycov[b,...] = torch.inverse(AtA) # Not efficient in each iter
+            #     dy = torch.matmul(ycov[b,...], d)
+            #     potential_y = yhat[b,...] - dy
+            #     yhat[b,...] = potential_y
+
+            #     eb_new = f(potential_y.unsqueeze(0))
+            #     eb_new_tot = torch.sum(torch.square(eb_new))
+            #     err_diff = abs(eb_new_tot - e_tot)
+
+            #     iter += 1
+
         return yhat, ycov
 
-    def forward(self, x):
+    def forward(self, x, y0=None):
         b = x.ndimension() > 1
         if not b:
             x = x.unsqueeze(0)
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
-        yhat, ycov = self.gauss_newton(x, y_init)
+        if y0 is None:
+            y_init = (x*torch.sin(x)).clone()
+        else:
+            y_init = y0.clone()
+        y = Variable(y_init.data, requires_grad=True)
+
+        # y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
+        yhat, ycov = self.gauss_newton(x, y)
         
         yhat = yhat.clone().detach().requires_grad_(True).flatten()
         ycov = ycov.clone().detach().requires_grad_(True).flatten()
@@ -604,6 +649,8 @@ class EnergyModelGN(nn.Module):
             ysamples = ydist.sample((self.n_sample,)) 
         else:
             ysamples = 20 * torch.rand(self.n_sample, nbatch) - 10 
+
+        # print(y, yhat)
 
         return yhat, ysamples
 

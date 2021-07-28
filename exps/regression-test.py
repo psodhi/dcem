@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm, colorbar
 from matplotlib import rc
 
-from regression import plot_energy_landscape, EnergyNetRFF, UnrollEnergyGN
+from regression import plot_energy_landscape, EnergyNetRFF, UnrollEnergyGD, UnrollEnergyGN, EnergyModelGN
 
 from setproctitle import setproctitle
 setproctitle('regression')
@@ -62,7 +62,7 @@ def main(cfg):
     x_train = torch.linspace(0., 2.*np.pi, steps=cfg.n_samples).to(device)
     y_train = x_train*torch.sin(x_train)
     x = np.linspace(0., 2.*np.pi, num=cfg.n_samples)
-    y = np.linspace(-2., 2., num=5)
+    y = np.linspace(0.0, 0.01, num=1)
 
     X, Y = np.meshgrid(x, y)
     Xflat = torch.from_numpy(X.reshape(-1)).float().to(device).unsqueeze(1)
@@ -73,10 +73,14 @@ def main(cfg):
     # Yflat = y_train.view(-1,1)
 
     for unroll_iter in range(15):
-      gn_model = UnrollEnergyGN(Enet, unroll_iter, 1.0)
-      gn_model.eval()
-      y_preds = gn_model(Xflat, Yflat)
-      # print(y_preds-Ygtflat)
+      # model = UnrollEnergyGN(Enet, unroll_iter, 1.0)
+      # model.eval()
+
+      model = EnergyModelGN(Enet, 100, 1e9, 1e-3, 10.0)
+      # model.eval()
+
+      y_preds,_ = model(Xflat, Ygtflat)
+      print(y_preds-Ygtflat)
       loss = F.mse_loss(input=y_preds, target=Ygtflat)
       converged = (torch.abs(y_preds - Ygtflat) < 1e-1).double()
       percent_converged = torch.sum(converged)/torch.numel(converged)
