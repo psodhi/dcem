@@ -8,9 +8,9 @@
 
 model: ${emgn}
 enet: ${enet_rff}
-n_disp_step: 200 # 200
-show_plot: True # True
-n_update: 10000
+n_disp_step: 500 # 200
+show_plot: False # True
+n_update: 2000
 n_inner_update: 1
 seed: 0
 n_hidden: 128
@@ -43,7 +43,7 @@ gn:
   class: regression.UnrollEnergyGN
   tag: gn
   params:
-    n_inner_iter: 9
+    n_inner_iter: 10
     inner_lr: 1 # Standard GN is 1.0
 
 dcem:
@@ -78,5 +78,6 @@ emgn:
   params:
     n_sample: 100
     temp: 1e9
+    n_inner_iter: 10.
     min_cov: 1e-3
     max_cov: 10.0

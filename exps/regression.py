@@ -60,14 +60,12 @@ def to_np(tensor_arr):
     np_arr = tensor_arr.detach().cpu().numpy()
     return np_arr
 
-def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=False, show_cbar=False, y_samples=None):
+def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None, norm=True, show_cbar=False, y_samples=None):
     x = np.linspace(0., 2.*np.pi, num=500)
     y = np.linspace(-7., 7., num=500)
 
     if ax is None:
-        # fig, ax = plt.subplots(1, 1, figsize=(6,4))
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
+        fig, ax = plt.subplots(1, 1, figsize=(6,4))
     else:
         fig = ax.get_figure()
     
@@ -89,12 +87,10 @@ def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None,
             Z[Z > 1.0] = 1.0
             Z = np.log(Z+1e-6)
             Z = np.clip(Z, -10., 0.)
-            # CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=-10., vmax=0., extend='min', alpha=0.8)
-            # CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=0., vmax=1., extend='max', alpha=0.8)
-            CS = ax.plot_surface(X, Y, Z, cmap=cm.Blues, vmin=-10., vmax=0.)
+            CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=-10., vmax=0., extend='min', alpha=0.8)
+#             CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10, vmin=0., vmax=1., extend='max', alpha=0.8)
         else:
-            # CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10)
-            CS = ax.plot_surface(X, Y, Z, cmap=cm.Blues)
+            CS = ax.contourf(X, Y, Z, cmap=cm.Blues, levels=10)
 
         if show_cbar:
             fig.colorbar(CS, ax=ax)
@@ -131,10 +127,7 @@ class RegressionExp():
         self.model = hydra.utils.instantiate(cfg.model, self.Enet)
         self.load_data()
 
-        # self.fig, self.ax = plt.subplots(1, 1, figsize=(6,4))
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111, projection='3d')
-        self.ax.view_init(elev=30., azim=0)
+        self.fig, self.ax = plt.subplots(1, 1, figsize=(6,4))
 
     def dump(self, tag='latest'):
         fname = os.path.join(self.exp_dir, f'{tag}.pkl')
@@ -172,7 +165,7 @@ class RegressionExp():
             print(self.cfg.pretty(), file=config_file)
             config_file.close()
 
-        model_directory = f"{BASE_PATH}/local/regression/models/{self.cfg.model.tag}/{dt}/"
+        model_directory = f"{BASE_PATH}/local/regression/models/{self.cfg.model.tag}/"
         if not os.path.exists(model_directory):
             os.makedirs(model_directory)
 
@@ -215,7 +208,8 @@ class RegressionExp():
                 savepath = os.path.join(directory, f"{step}.png")
                 plt.savefig(savepath)
 
-                modelpath = os.path.join(model_directory, "model.pt")
+                # modelpath = os.path.join(model_directory, f"{dt}.pt")
+                modelpath = os.path.join(model_directory, f"model_inner_iter_{self.cfg.model.params.n_inner_iter:03d}.pt")
                 torch.save(self.Enet.state_dict(), modelpath)
 
             step += 1
@@ -238,7 +232,7 @@ class RegressionExp():
             print(self.cfg.pretty(), file=config_file)
             config_file.close()
 
-        model_directory = f"{BASE_PATH}/local/regression/models/{self.cfg.model.tag}/{dt}/"
+        model_directory = f"{BASE_PATH}/local/regression/models/{self.cfg.model.tag}/"
         if not os.path.exists(model_directory):
             os.makedirs(model_directory)
 
@@ -304,7 +298,8 @@ class RegressionExp():
                 savepath = os.path.join(directory, "{:06d}.png".format(step))
                 plt.savefig(savepath)
 
-                modelpath = os.path.join(model_directory, "model.pt")
+                # modelpath = os.path.join(model_directory, f"{dt}.pt")
+                modelpath = os.path.join(model_directory, f"model_inner_iter_{self.cfg.model.params.n_inner_iter:03d}.pt")
                 torch.save(self.Enet.state_dict(), modelpath)
             
             step += 1
@@ -534,11 +529,14 @@ class UnrollEnergyCEM(nn.Module):
         return yhat
 
 class EnergyModelGN(nn.Module):
-    def __init__(self, Enet, n_sample, temp, min_cov, max_cov):
+    def __init__(self, Enet, n_sample, temp, min_cov, max_cov, n_inner_iter):
         super().__init__()
         self.Enet = Enet
         self.n_sample = n_sample
         self.temp = temp
+
+        self.n_inner_iter = n_inner_iter
+
         self.min_cov = min_cov
         self.max_cov = max_cov
 
@@ -555,11 +553,11 @@ class EnergyModelGN(nn.Module):
 
         # TODO: What convergence criteria?
         err_tol = 1e-7
-        max_iter = 100
+        max_iter = self.n_inner_iter
 
         for b in range(yhat.size(0)):
             err_diff = 1e9
-            alpha = 1e9
+            alpha = 1.0
             iter = 0
 
             def f(y):
@@ -580,9 +578,8 @@ class EnergyModelGN(nn.Module):
                 AtA = torch.matmul(A.t(), A)
                 augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
                 d = torch.matmul(A.t(), e)
-                H_inv = torch.inverse(augmented_H)
-                # ycov[b,...] = torch.inverse(augmented_H) # Not efficient in each iter
-                dy = torch.matmul(H_inv, d)
+                ycov[b,...] = torch.inverse(AtA) # Not efficient in each iter
+                dy = torch.matmul(torch.inverse(augmented_H), d)
                 potential_y = yhat[b,...] - dy
 
                 eb_new = f(potential_y.unsqueeze(0))
@@ -590,7 +587,6 @@ class EnergyModelGN(nn.Module):
                 #print(eb_new_tot, e_tot)
                 if eb_new_tot < e_tot:
                     yhat[b,...] = potential_y
-                    ycov[b,...] = torch.inverse(AtA)
                     alpha /= 10
 
                     err_diff = abs(eb_new_tot - e_tot)
@@ -599,46 +595,17 @@ class EnergyModelGN(nn.Module):
 
                 iter += 1
 
-            # while (iter < max_iter and err_diff > err_tol):
-            #     e = f(yhat[b:b+1,...])
-            #     e_tot = torch.sum(torch.square(e))
-
-            #     jacobian = torch.autograd.functional.jacobian(f, yhat[b:b+1,...])
-            #     # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
-            #     jacobian = torch.diagonal(jacobian, dim1=0, dim2=2).permute(2, 0, 1)
-            #     # print(jacobian.shape, b)
-            #     # Loop over batches?
-            #     A = jacobian[0,...]
-            #     AtA = torch.matmul(A.t(), A)
-            #     d = torch.matmul(A.t(), e)
-            #     ycov[b,...] = torch.inverse(AtA) # Not efficient in each iter
-            #     dy = torch.matmul(ycov[b,...], d)
-            #     potential_y = yhat[b,...] - dy
-            #     yhat[b,...] = potential_y
-
-            #     eb_new = f(potential_y.unsqueeze(0))
-            #     eb_new_tot = torch.sum(torch.square(eb_new))
-            #     err_diff = abs(eb_new_tot - e_tot)
-
-            #     iter += 1
-
         return yhat, ycov
 
-    def forward(self, x, y0=None):
+    def forward(self, x):
         b = x.ndimension() > 1
         if not b:
             x = x.unsqueeze(0)
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        if y0 is None:
-            y_init = (x*torch.sin(x)).clone()
-        else:
-            y_init = y0.clone()
-        y = Variable(y_init.data, requires_grad=True)
-
-        # y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
-        yhat, ycov = self.gauss_newton(x, y)
+        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
+        yhat, ycov = self.gauss_newton(x, y_init)
         
         yhat = yhat.clone().detach().requires_grad_(True).flatten()
         ycov = ycov.clone().detach().requires_grad_(True).flatten()
@@ -649,8 +616,6 @@ class EnergyModelGN(nn.Module):
             ysamples = ydist.sample((self.n_sample,)) 
         else:
             ysamples = 20 * torch.rand(self.n_sample, nbatch) - 10 
-
-        # print(y, yhat)
 
         return yhat, ysamples
 
