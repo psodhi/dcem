@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) Facebook, Inc. and its affiliates.
-
-import argparse
-import typing
+# Example adapted from: https://github.com/facebookresearch/dcem/blob/main/exps/regression.py
 
 import copy
 
@@ -11,10 +9,8 @@ import numpy.random as npr
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.autograd import Variable
 
@@ -26,22 +22,22 @@ import datetime
 import pickle as pkl
 import rff
 
-from dcem import dcem
+from leopy.utils.dcem import dcem
 
 import hydra
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import cm, colorbar
-from matplotlib import rc
 
 from setproctitle import setproctitle
 setproctitle('regression')
 
 plt.ion()
-BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
+plt.rcParams.update({'font.size': 20})
 
-@hydra.main(config_path="regression-conf.yaml", strict=True)
+BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+@hydra.main(config_path="regression-conf.yaml")
 def main(cfg):
     import sys
     from IPython.core import ultratb
@@ -51,8 +47,8 @@ def main(cfg):
 
     exp = RegressionExp(cfg)
     
-    if (cfg.model.tag == 'emcem' or cfg.model.tag == 'emgn'):
-        exp.run_ebm()
+    if (cfg.model.tag == 'leo_gn' or cfg.model.tag == 'leo_cem'):
+        exp.run_leo()
     else:
         exp.run()
 
@@ -69,7 +65,8 @@ def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None,
     else:
         fig = ax.get_figure()
     
-    ax.plot(to_np(x_train), to_np(y_train), color='k')
+    # plt.axis('off')
+    ax.plot(to_np(x_train), to_np(y_train), color='darkgreen', linewidth=2)
 
     if Enet is not None:
         X, Y = np.meshgrid(x, y)
@@ -106,7 +103,10 @@ def plot_energy_landscape(x_train, y_train, Enet=None, pred_model=None, ax=None,
 
     ax.set_xlim(0, 2.*np.pi)
     ax.set_ylim(-7, 7)
-        
+
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+       
     return fig, ax, Z
 
 class RegressionExp():
@@ -120,11 +120,11 @@ class RegressionExp():
         torch.manual_seed(cfg.seed)
         npr.seed(cfg.seed)
 
-        self.device = torch.device("cuda") \
-            if torch.cuda.is_available() else torch.device("cpu")
-        #self.Enet = EnergyNet(n_in=1, n_out=1, n_hidden=cfg.n_hidden).to(self.device)
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        # self.Enet = EnergyNet(n_in=1, n_out=1, n_hidden=cfg.n_hidden).to(self.device)
         self.Enet = hydra.utils.instantiate(cfg.enet, n_in=1, n_out=1).to(self.device)
         self.model = hydra.utils.instantiate(cfg.model, self.Enet)
+
         self.load_data()
 
         self.fig, self.ax = plt.subplots(1, 1, figsize=(6,4))
@@ -186,8 +186,6 @@ class RegressionExp():
 
             if step % self.cfg.n_disp_step == 0:
                 y_preds = self.model(self.x_train.view(-1, 1)).squeeze()
-                # print(y_preds)
-                # print(self.y_train)
                 loss = F.mse_loss(input=y_preds, target=self.y_train)
                 lr_sched.step(loss)
                 print(f'Iteration {step}: Loss {loss:.2f}')
@@ -201,20 +199,21 @@ class RegressionExp():
                 self.dump('latest')
             
                 plt.cla()
-                plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax)
+                plot_energy_landscape(self.x_train, self.y_train, Enet=self.Enet, ax=self.ax, show_cbar=False)
                 if self.cfg.show_plot:
                     plt.show()
                     plt.pause(1e-3)
-                savepath = os.path.join(directory, f"{step}.png")
+                savepath = os.path.join(directory, f"{step:06d}.png")
                 plt.savefig(savepath)
 
-                # modelpath = os.path.join(model_directory, f"{dt}.pt")
+                # modelpath = os.path.join(model_directory, "model.pt")
                 modelpath = os.path.join(model_directory, f"model_inner_iter_{self.cfg.model.params.n_inner_iter:03d}.pt")
+                print(f"Saving model to {modelpath}")
                 torch.save(self.Enet.state_dict(), modelpath)
 
             step += 1
 
-    def run_ebm(self):
+    def run_leo(self):
         # opt = optim.SGD(self.Enet.parameters(), lr=1e-1)
         opt = optim.Adam(self.Enet.parameters(), lr=self.cfg.lr)
         lr_sched = ReduceLROnPlateau(opt, 'min', patience=20, factor=0.5, verbose=True)
@@ -277,7 +276,6 @@ class RegressionExp():
                 loss = torch.mean(loss)
 
                 tracking_error = F.mse_loss(input=y_mean, target=self.y_train)
-                # print(y_mean, self.y_train)
 
                 lr_sched.step(loss)
                 print(f'Iteration {step}: Loss {loss.item()}, Tracking Error: {tracking_error.item()}')
@@ -291,15 +289,16 @@ class RegressionExp():
                 self.dump('latest')
 
                 plt.cla()
-                plot_energy_landscape(self.x_train, self.y_train, self.Enet, ax=self.ax, y_samples=y_samples)
+                plot_energy_landscape(self.x_train, self.y_train,  Enet=self.Enet, ax=self.ax, show_cbar=False, y_samples=y_samples)
                 if self.cfg.show_plot:
                     plt.show()
                     plt.pause(1e-3)
-                savepath = os.path.join(directory, "{:06d}.png".format(step))
+                savepath = os.path.join(directory, f"{step:06d}.png")
                 plt.savefig(savepath)
 
-                # modelpath = os.path.join(model_directory, f"{dt}.pt")
+                # modelpath = os.path.join(model_directory, "model.pt")
                 modelpath = os.path.join(model_directory, f"model_inner_iter_{self.cfg.model.params.n_inner_iter:03d}.pt")
+                print(f"Saving model to {modelpath}")
                 torch.save(self.Enet.state_dict(), modelpath)
             
             step += 1
@@ -351,30 +350,27 @@ class EnergyNetRFF(nn.Module):
         E = self.E_net(encoded)
         return E
 
-class UnrollEnergyGD(nn.Module):
-    def __init__(self, Enet, n_inner_iter, inner_lr):
+class UnrollGD(nn.Module):
+    def __init__(self, Enet, n_inner_iter, inner_lr, init_scheme='zero'):
         super().__init__()
         self.Enet = Enet
         self.n_inner_iter = n_inner_iter
         self.inner_lr = inner_lr
+        self.init_scheme = init_scheme
+        
+        print("Instantiated UnrollGD class")
 
-    def forward(self, x, y0=None):
+    def forward(self, x):
         b = x.ndimension() > 1
         if not b:
             x = x.unsqueeze(0)
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        if y0 is None:
-            y_init = (x*torch.sin(x)).clone()
-        else:
-            y_init = y0.clone()
+        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+        if (self.init_scheme == 'gt'): y_init = (x*torch.sin(x)).clone()
+
         y = Variable(y_init.data, requires_grad=True)
-
-        # y = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
-        # y_init = (x*torch.sin(x)).clone()
-        # y = Variable(y_init.data, requires_grad=True)
-
         inner_opt = higher.get_diff_optim(
             torch.optim.SGD([y], lr=self.inner_lr),
             [y], device=x.device
@@ -387,12 +383,16 @@ class UnrollEnergyGD(nn.Module):
         
         return y
 
-class UnrollEnergyGN(nn.Module):
-    def __init__(self, Enet, n_inner_iter, inner_lr):
+class UnrollGN(nn.Module):
+    ''' 1-D Gauss Newton '''
+    def __init__(self, Enet, n_inner_iter, inner_lr, init_scheme='zero'):
         super().__init__()
         self.Enet = Enet
         self.n_inner_iter = n_inner_iter
         self.inner_lr = inner_lr
+        self.init_scheme = init_scheme
+
+        print("Instantiated UnrollGN class")
 
     def forward(self, x, y0=None):
         b = x.ndimension() > 1
@@ -401,32 +401,19 @@ class UnrollEnergyGN(nn.Module):
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        if y0 is None:
-            y_init = (x*torch.sin(x)).clone()
-        else:
-            y_init = y0.clone()
+        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+        if (self.init_scheme == 'gt'): y_init = (x*torch.sin(x)).clone()
+
         y = [Variable(y_init.data, requires_grad=True)]
         # y = [-7+14*torch.rand(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
-        # y = [torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)]
         y[-1].retain_grad()
 
         for iter in range(self.n_inner_iter):
-            # print("Iter: ", iter)
-            # E = self.Enet(x, y[-1])
             y_tmp = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
             y_new = y_tmp.clone()
             for b in range(x.shape[0]):
-                # E = self.Enet(x[b,...], y[-1][b,...])
-                # if iter == 0:
-                    # E[b].backward(retain_graph=True, create_graph=True)
-                # else:
-                    # E[b].backward(retain_graph=True, create_graph=False)
-                # E[b].backward(retain_graph=True, create_graph=False)
                 yb = y[-1][b]
                 E = self.Enet(x[b], yb)
-                # H = torch.autograd.grad(grad_yb, yb, retain_graph=True, create_graph=False)
-                # grad_gn = torch.autograd.grad(E[b], y[-1], retain_graph=True, create_graph=True)
-                # print(y[-1].grad)
 
                 # Gauss-Newton
                 grad_yb = torch.autograd.grad(E, yb, retain_graph=True, create_graph=True)
@@ -445,48 +432,9 @@ class UnrollEnergyGN(nn.Module):
             y.append(y_new)
             y[-1].retain_grad()
 
-            # gradients = torch.eye(E.shape[1])
-            # gradients = gradients.repeat(E.shape[0], 1)
-            # print(E.shape, gradients.shape)
-            # # print(gradients)
-            # J_inv = torch.zeros_like(y[-1])
-            # for b in range(E.shape[0]):
-            #     gradients = torch.zeros_like(y[-1])
-            #     gradients[b,:] = 1
-            #     E.backward(gradients, retain_graph=True, create_graph=False)
-            #     y[-1].grad[b] = 
-            #     J_inv[b,:] = y[-1].grad
-
-            # J_inv = torch.squeeze(torch.inverse(torch.unsqueeze(y[-1].grad, 2)), 2)
-            # step = J_inv*E
-            # # # TODO: Is this negative?
-            # y_new = y[-1] - self.inner_lr * step
-            # y_new.retain_grad()
-            # y.append(y_new)
-
-            # Es, dE_dy = self.get_batch_jacobian(x, y[-1])
-            # noutputs = 1
-
-            # x = x.unsqueeze(1) # b, 1 ,in_dim
-            # x = x.repeat(1, noutputs, 1) # b, out_dim, in_dim
-
-            # y = y.unsqueeze(1) # b, 1 ,in_dim
-            # n = y.size()[0]
-            # y = y.repeat(1, noutputs, 1) # b, out_dim, in_dim
-            # y.requires_grad_(True)
-            # E = self.Enet(x, y)
-            # input_val = torch.eye(noutputs).reshape(1,noutputs, noutputs).repeat(n, 1, 1)
-            # E.backward(input_val)
-            # J_inv = torch.inverse(dE_dy)
-            # step = J_inv*Es
-            # y_new = y[-1] - self.inner_lr * step
-            # y_new.retain_grad()
-            # y.append(y_new)
-
-
         return y[-1]
 
-class UnrollEnergyCEM(nn.Module):
+class UnrollCEM(nn.Module):
     def __init__(self, Enet, n_sample, n_elite,
                  n_iter, init_sigma, temp, normalize):
         super().__init__()
@@ -498,7 +446,7 @@ class UnrollEnergyCEM(nn.Module):
         self.temp = temp
         self.normalize = normalize
 
-        print("Instantiated UnrollEnergyCEM class")
+        print("Instantiated UnrollCEM class")
 
     def forward(self, x):
         b = x.ndimension() > 1
@@ -528,19 +476,19 @@ class UnrollEnergyCEM(nn.Module):
 
         return yhat
 
-class EnergyModelGN(nn.Module):
-    def __init__(self, Enet, n_sample, temp, min_cov, max_cov, n_inner_iter):
+class LEOGN(nn.Module):
+    def __init__(self, Enet, n_sample, temp, min_cov, max_cov, n_inner_iter, init_scheme='zero'):
         super().__init__()
         self.Enet = Enet
         self.n_sample = n_sample
         self.temp = temp
-
-        self.n_inner_iter = n_inner_iter
-
         self.min_cov = min_cov
         self.max_cov = max_cov
+        self.n_inner_iter = n_inner_iter
 
-        print("Instantiated EnergyModelGN class")
+        self.init_scheme = init_scheme
+
+        print("Instantiated LEOGN class")
 
     def gauss_newton(self, x, y_init):
         # Assuming nonlinear least squares min ||f||^2
@@ -551,13 +499,11 @@ class EnergyModelGN(nn.Module):
         yhat = y_init.clone()
         ycov = torch.zeros(nbatch, ydim, ydim, device=y_init.device, requires_grad=False)
 
-        # TODO: What convergence criteria?
         err_tol = 1e-7
         max_iter = self.n_inner_iter
-
         for b in range(yhat.size(0)):
             err_diff = 1e9
-            alpha = 1.0
+            alpha = 1.
             iter = 0
 
             def f(y):
@@ -572,8 +518,6 @@ class EnergyModelGN(nn.Module):
                 jacobian = torch.autograd.functional.jacobian(f, yhat[b:b+1,...])
                 # Diagonal trick from here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/2
                 jacobian = torch.diagonal(jacobian, dim1=0, dim2=2).permute(2, 0, 1)
-                # print(jacobian.shape, b)
-                # Loop over batches?
                 A = jacobian[0,...]
                 AtA = torch.matmul(A.t(), A)
                 augmented_H = AtA + alpha*torch.diag(torch.diag(AtA))
@@ -584,7 +528,7 @@ class EnergyModelGN(nn.Module):
 
                 eb_new = f(potential_y.unsqueeze(0))
                 eb_new_tot = torch.sum(torch.square(eb_new))
-                #print(eb_new_tot, e_tot)
+                # print(eb_new_tot, e_tot)
                 if eb_new_tot < e_tot:
                     yhat[b,...] = potential_y
                     alpha /= 10
@@ -604,9 +548,10 @@ class EnergyModelGN(nn.Module):
         assert x.ndimension() == 2
         nbatch = x.size(0)
 
-        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=False)
+        y_init = torch.zeros(nbatch, self.Enet.n_out, device=x.device, requires_grad=True)
+        if (self.init_scheme == 'gt'): y_init = (x*torch.sin(x)).clone()
+
         yhat, ycov = self.gauss_newton(x, y_init)
-        
         yhat = yhat.clone().detach().requires_grad_(True).flatten()
         ycov = ycov.clone().detach().requires_grad_(True).flatten()
 
@@ -619,7 +564,7 @@ class EnergyModelGN(nn.Module):
 
         return yhat, ysamples
 
-class EnergyModelCEM(nn.Module):
+class LEOCEM(nn.Module):
     def __init__(self, Enet, n_sample, temp, min_cov, max_cov, cem_n_sample, cem_n_elite,
                  cem_n_iter, cem_init_sigma, cem_temp, cem_normalize):
         super().__init__()
@@ -635,7 +580,7 @@ class EnergyModelCEM(nn.Module):
         self.cem_temp = cem_temp
         self.cem_normalize = cem_normalize
 
-        print("Instantiated EnergyModelCEM class")
+        print("Instantiated LEOCEM class")
 
     def forward(self, x):
         b = x.ndimension() > 1

@@ -6,11 +6,11 @@
 #     dir: ${hydra.name}
 #     subdir: ${model.tag}.${seed}
 
-model: ${emgn}
+model: ${leo_gn}
 enet: ${enet_rff}
-n_disp_step: 500 # 200
-show_plot: False # True
-n_update: 2000
+n_disp_step: 1000 # 200
+show_plot: True # True
+n_update: 5000
 n_inner_update: 1
 seed: 0
 n_hidden: 128
@@ -32,22 +32,35 @@ enet_rff:
     sigma: 1.
     encoded_size: 128
 
-gd:
-  class: regression.UnrollEnergyGD
-  tag: gd
+unroll_gd:
+  class: regression.UnrollGD
+  tag: unroll_gd
   params:
     n_inner_iter: 10
-    inner_lr: 1e-2
+    inner_lr: 1e-3
+    init_scheme: zero # zero, gt
 
-gn:
-  class: regression.UnrollEnergyGN
-  tag: gn
+unroll_gn:
+  class: regression.UnrollGN
+  tag: unroll_gn
   params:
     n_inner_iter: 10
-    inner_lr: 1 # Standard GN is 1.0
+    inner_lr: 1 # standard GN is 1.0
+    init_scheme: zero # zero, gt
+
+leo_gn:
+  class: regression.LEOGN
+  tag: leo_gn
+  params:
+    n_sample: 100
+    temp: 1e9
+    min_cov: 1e-3
+    max_cov: 10.0
+    n_inner_iter: 10
+    init_scheme: zero # zero, gt
 
 dcem:
-  class: regression.UnrollEnergyCEM
+  class: regression.UnrollCEM
   tag: dcem
   params:
     n_sample: 100
@@ -57,9 +70,9 @@ dcem:
     temp: 1.
     normalize: True
 
-emcem:
-  class: regression.EnergyModelCEM
-  tag: emcem
+leo_cem:
+  class: regression.LEOCEM
+  tag: leo_cem
   params:
     n_sample: 100
     temp: 1.
@@ -71,13 +84,3 @@ emcem:
     cem_init_sigma: 7.
     cem_temp: 1.
     cem_normalize: True
-
-emgn:
-  class: regression.EnergyModelGN
-  tag: emgn
-  params:
-    n_sample: 100
-    temp: 1e9
-    n_inner_iter: 10.
-    min_cov: 1e-3
-    max_cov: 10.0
